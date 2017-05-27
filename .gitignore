@@ -99,3 +99,25 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+# data folders
+quora_questions/
+.data_cache/
+.vector_cache/
+spinn_paraphrase/.data_cache
+
+__MACOSX/
+
+results/
+all_results/
+
+*.txt
+*.log
+# pytorch saved models
+*.pt
+
+best_results/
+
+run_*/
+
+tags
