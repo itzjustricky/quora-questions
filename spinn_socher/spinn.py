@@ -39,6 +39,22 @@ def unbundle(state):
     return torch.split(torch.cat(state, 1), 1, 0)
 
 
+def bundle_inner_nodes(node_maps):
+    # batch_size = len(node_maps)
+
+    bundles = []
+    for node_map in node_maps:
+        bundled_nodes = []
+        node_depths = sorted(list(node_map.keys()))
+
+        for i in range(node_depths):
+            bundled_nodes.extend(node_map[i])
+        bundles.append(torch.cat(bundled_nodes, 0))
+        # for i in range(batch_size):
+        #     pass
+    return bundles
+
+
 class Reduce(nn.Module):
     """ TreeLSTM composition module for SPINN """
 
@@ -186,8 +202,8 @@ class SPINN(nn.Module):
         depth_tracker = [0 for i in range(batch_size)]
 
         # track the right-to-left order of each depth in tree
-        # node_map = {}
-        node_map = [defaultdict(list) for i in range(batch_size)]
+        # node_maps = {}
+        node_maps = [defaultdict(list) for i in range(batch_size)]
 
         if hasattr(self, 'tracker'):
             self.tracker.reset_state()
@@ -240,21 +256,23 @@ class SPINN(nn.Module):
                     depth_tracker[cnt] -= 1
                 cnt += 1
 
-            cnt = 0
             if rights:  # if none of batches had reduce then can skip
                 reduced = iter(self.reduce(lefts, rights, trackings))
                 # zip only goes over up to the end of the smaller of the two iterables
                 # will only go through the one transition for each batch
+                cnt = 0
                 for transition, stack in zip(trans.data, stacks):
                     if transition == 2:
                         reduced_state = next(reduced)
-                        node_map[depth_tracker[cnt]].append(reduced_state)
+
+                        node_maps[cnt][depth_tracker[cnt]].insert(0, reduced_state.clone())
                         stack.append(reduced_state)
-                cnt += 1
+                    cnt += 1
 
         # TODO return all the states
         # HERE
+        return bundle_inner_nodes(node_maps)
 
         # if trans_loss is not 0:
         # bundle all the states together from the batch
-        return bundle([stack.pop() for stack in stacks])[0]
+        # return bundle([stack.pop() for stack in stacks])[0]

@@ -3,9 +3,13 @@
 
 """
 
+import itertools
+import numpy as np
+
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+import torch.nn.functional as F
 
 from spinn import SPINN
 from sentence_features import sentence_features
@@ -144,6 +148,8 @@ class ParaphraseClassifierExtra(nn.Module):
         self.embed_bn = BatchNorm(config.d_proj)
         self.embed_dropout = nn.Dropout(p=config.embed_dropout)
         self.encoder = SPINN(config) if config.spinn else Encoder(config)
+        self.sim_mat = SimilarityMatrix(pnorm=2)
+        self.dynamic_pool = DynamicMin2DPool(grid_size=15)
 
         feat_in_size = config.d_hidden * (
             2 if self.config.birnn and not self.config.spinn else 1)
@@ -199,31 +205,78 @@ class ParaphraseClassifierExtra(nn.Module):
             sentence1_trans = sentence2_trans = None
 
         # encode the sentences using some encoder model
-        sentence1 = self.encoder(sentence1_embed, sentence1_trans)
-        sentence2 = self.encoder(sentence2_embed, sentence2_trans)
+        sentence1_states = self.encoder(sentence1_embed, sentence1_trans)
+        sentence2_states = self.encoder(sentence2_embed, sentence2_trans)
 
-        # TODO
         # replace with SimilarityMatrix here
-
+        sim_mats = self.sim_mat(sentence1_states, sentence2_states)
         # pooling operation here
+        pooled_matrix = self.dynamic_pool(sim_mats)
 
         # finally use softmax as before
-
         scores = self.out(
             torch.cat(
-                [self.feature(sentence1, sentence2),
+                [pooled_matrix,
                  sentence_features(batch.sentence1, batch.sentence2, self.sentence_vocab)],
                 1   # the dimensions to concatenate over
             )
         )
-
         return scores
 
 
 class SimilarityMatrix(nn.Module):
 
-    def __init__(self):
+    def __init__(self, p_norm=2):
         super(SimilarityMatrix, self).__init__()
 
+        # self.pdist = nn.PairwiseDistance(p_norm)
+
     def forward(self, states_1, states_2):
-        pass
+        n, m = len(states_1), len(states_2)
+
+        batch = zip(states_1, states_2)
+        simmat_batch = []
+        for sent_states_1, sent_states_2 in batch:
+            distances = []
+            for sent_state_1, sent_state_2 in itertools.product(sent_states_1, sent_states_2):
+                distances.append(F.pairwise_distance(sent_state_1, sent_state_2))
+            simmat_batch.append(torch.stack(distances, 0).contiguous().view(n, m))
+        return simmat_batch
+
+
+class DynamicMin2DPool(nn.Module):
+
+    def __init__(self, grid_size):
+        super(DynamicMin2DPool, self).__init__()
+        # the resulting matrix output will be n_p x n_p
+        # where the passed grid_size is n_p
+        self.grid_size = grid_size
+
+    def forward(self, sim_matrices):
+        grid_outputs = []
+        for sim_matrix in sim_matrices:
+            if sim_matrix.dim() != 2:
+                raise ValueError("The sim_matrix passed should be 2-D.")
+
+            n_rows, n_cols = tuple(sim_matrix.size())
+            # the dimensions of the pooling kernel
+            krows_size = np.floor(n_rows / self.grid_size)
+            kcols_size = np.floor(n_cols / self.grid_size)
+
+            n_row_regions = int(np.ceil(n_rows / krows_size))
+            n_col_regions = int(np.ceil(n_cols / kcols_size))
+
+            grid_output = Variable(torch.zeros(self.grid_size, self.grid_size))
+            for rowi in range(n_row_regions):
+                for coli in range(n_col_regions):
+                    row_start, row_end = rowi * krows_size, (rowi+1) * krows_size
+                    row_end = min(row_end, n_rows)
+
+                    col_start, col_end = coli * kcols_size, (coli+1) * kcols_size
+                    col_end = min(col_end, n_cols)
+
+                    grid_output[rowi][coli] = sim_matrix[row_start:row_end, col_start, col_end].min()
+
+            grid_outputs.append(grid_output.view(-1))
+
+        return torch.stack(grid_output, dim=0)
