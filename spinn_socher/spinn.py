@@ -1,3 +1,4 @@
+import bpdb
 """
     James Bradbury's SPINN code
 
@@ -50,8 +51,7 @@ def bundle_inner_nodes(node_maps):
         for i in range(node_depths):
             bundled_nodes.extend(node_map[i])
         bundles.append(torch.cat(bundled_nodes, 0))
-        # for i in range(batch_size):
-        #     pass
+
     return bundles
 
 
@@ -194,16 +194,21 @@ class SPINN(nn.Module):
         buffers = [list(torch.split(b.squeeze(1), 1, 0))    # remove all inputs of size 1
                    for b in torch.split(buffers, 1, 1)]     # get all buffers stored
 
+        # track the right-to-left order of each depth in tree
+        node_maps = [defaultdict(list) for i in range(batch_size)]
+
+        for i, b in enumerate(torch.split(buffers, 1, 1)):
+            # I need to make sure this is as expected
+            bpdb.set_trace()  # ------------------------------ Breakpoint ------------------------------ #
+            node_maps[i][0].extend(
+                list(torch.split(b.squeeze(1), 1, 0)))
+
         # we also need two null values at the bottom of each stack,
         # so we can copy from the nulls in the input; these nulls
         # are all needed so that the tracker can run even if the
         # buffer or stack is empty
         stacks = [[buf[0], buf[0]] for buf in buffers]
         depth_tracker = [0 for i in range(batch_size)]
-
-        # track the right-to-left order of each depth in tree
-        # node_maps = {}
-        node_maps = [defaultdict(list) for i in range(batch_size)]
 
         if hasattr(self, 'tracker'):
             self.tracker.reset_state()
@@ -269,8 +274,6 @@ class SPINN(nn.Module):
                         stack.append(reduced_state)
                     cnt += 1
 
-        # TODO return all the states
-        # HERE
         return bundle_inner_nodes(node_maps)
 
         # if trans_loss is not 0:
