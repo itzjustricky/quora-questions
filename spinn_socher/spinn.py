@@ -13,6 +13,7 @@ from torch.autograd import Variable
 # from torch.nn import functional as F
 
 import itertools
+from collections import defaultdict
 
 
 def tree_lstm(c1, c2, lstm_in):
@@ -165,6 +166,8 @@ class SPINN(nn.Module):
         :param transitions: indicates the parsing of the sentence structure;
             2, 3 represents shift, reduce respectively
         """
+
+        batch_size = buffers.size(0)
         # The input comes in as a single tensor of word embeddings;
         # I need it to be a list of stacks, one for each example in
         # the batch, that we can pop from independently. The words in
@@ -180,6 +183,11 @@ class SPINN(nn.Module):
         # are all needed so that the tracker can run even if the
         # buffer or stack is empty
         stacks = [[buf[0], buf[0]] for buf in buffers]
+        depth_tracker = [0 for i in range(batch_size)]
+
+        # track the right-to-left order of each depth in tree
+        # node_map = {}
+        node_map = [defaultdict(list) for i in range(batch_size)]
 
         if hasattr(self, 'tracker'):
             self.tracker.reset_state()
@@ -220,22 +228,32 @@ class SPINN(nn.Module):
             lefts, rights, trackings = [], [], []
             batch = zip(trans.data, buffers, stacks, tracker_states)
 
-            # for one transition .. since this is batch?
+            cnt = 0
             for transition, buf, stack, tracking in batch:
                 if transition == 3:     # shift
                     stack.append(buf.pop())
+                    depth_tracker[cnt] += 1
                 elif transition == 2:   # reduce
                     rights.append(stack.pop())
                     lefts.append(stack.pop())
                     trackings.append(tracking)
+                    depth_tracker[cnt] -= 1
+                cnt += 1
 
+            cnt = 0
             if rights:  # if none of batches had reduce then can skip
                 reduced = iter(self.reduce(lefts, rights, trackings))
                 # zip only goes over up to the end of the smaller of the two iterables
                 # will only go through the one transition for each batch
                 for transition, stack in zip(trans.data, stacks):
                     if transition == 2:
-                        stack.append(next(reduced))
+                        reduced_state = next(reduced)
+                        node_map[depth_tracker[cnt]].append(reduced_state)
+                        stack.append(reduced_state)
+                cnt += 1
+
+        # TODO return all the states
+        # HERE
 
         # if trans_loss is not 0:
         # bundle all the states together from the batch
